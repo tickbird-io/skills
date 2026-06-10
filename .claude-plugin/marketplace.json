@@ -1,0 +1,15 @@
+{
+  "name": "tickbird",
+  "owner": {
+    "name": "Tickbird",
+    "email": "hello@tickbird.io"
+  },
+  "description": "Tickbird integrations for Claude Code.",
+  "plugins": [
+    {
+      "name": "tickbird",
+      "source": "./plugins/tickbird",
+      "description": "Auto-track time while you work, with confirmed commits."
+    }
+  ]
+}
