@@ -28,6 +28,7 @@ Hooks run a stopwatch so you don't have to — installed by the Tickbird plugin,
 
 | Event | Action | Why |
 | --- | --- | --- |
+| `SessionStart` | record session id | Lets each session bind its own task (see below) |
 | `UserPromptSubmit` | `timer resume` (or `start`) | You sent a prompt → start counting |
 | `Stop` | `timer pause` | Claude finished the turn → stop counting |
 | `SessionEnd` | `timer pause` | Session over → ensure nothing keeps counting |
@@ -37,10 +38,28 @@ whether 30 seconds or 3 hours away. You only accrue time while Claude is activel
 prompt. The hooks call the bundled `tickbird-track.sh`, which no-ops unless a `.tickbird` binding
 exists and the CLI is installed. The hooks NEVER commit — only resume/pause.
 
-## Prerequisites
+### The binding is split so concurrent agents don't collide
 
-- **`tickbird` on PATH.** Check with `command -v tickbird`. If it's missing, offer to install it —
-  the install runs a remote script, so **ask the user before running it**:
+Several agents can run in one repo at once, each on a **different task**. So the binding has two
+layers (both gitignored):
+
+- **`.tickbird`** (repo root) — the **reusable** `TICKBIRD_ORG` + `TICKBIRD_PROJECT`. Written
+  once; every session reuses it, so you're never re-asked for the org/project. Its presence is
+  also what enables tracking in this repo.
+- **`.tickbird.d/<session_id>`** — **this session's** `TICKBIRD_TASK` (and, rarely, a
+  `TICKBIRD_PROJECT` override). Each session writes its own file, so one session swapping its
+  task never clobbers another's, and each session's pause/resume only ever touches its own task.
+
+The `SessionStart` hook exports `TICKBIRD_SESSION_ID` for you; always key the per-session file
+off `$TICKBIRD_SESSION_ID` (fall back to `$CLAUDE_CODE_SESSION_ID` if it's unset).
+
+## Prerequisites (best-effort — don't pre-check, just run)
+
+Don't gate on probing the environment first. **Run the command you actually need and react to
+its error**, so the happy path stays one step:
+
+- **CLI missing** (command not found / `127`) → offer to install it. The install runs a remote
+  script, so **ask before running it**:
 
   ```bash
   curl -fsSL https://tickbird.io/install.sh | sh
@@ -49,43 +68,59 @@ exists and the CLI is installed. The hooks NEVER commit — only resume/pause.
   Override target with `TICKBIRD_VERSION=…` or `TICKBIRD_INSTALL_DIR=~/bin`. If the user declines
   the remote script, point them at a hand-downloaded binary from `https://tickbird.io/cli/latest/`
   (`tickbird-linux-x64`, `tickbird-darwin-arm64`, …) or, inside this repo's dev tree, `go run .`
-  from `apps/cli`. After install, verify with `tickbird version`.
-- `TICKBIRD_TOKEN` set in the environment (a `tpat_…` Personal Access Token). For a session,
-  put it in `.claude/settings.local.json` under `env`, or the user's shell profile. Never write
-  the token into a repo file.
+  from `apps/cli`.
+- **Auth error** (exit `3`) → tell the user to authenticate: `tickbird login`, or set a `tpat_…`
+  Personal Access Token via `TICKBIRD_TOKEN` (in `.claude/settings.local.json` under `env`, or
+  their shell profile — never write the token into a repo file).
 
-## First use: bind this repo to a project + task
+Everything else (`2` usage, `4` not-found, `5` API) → surface the message and adjust.
 
-A timer needs an **org + project + task**. There's no preset binding — resolve it once, with the
-user, then cache it so the hooks can run unattended.
+## Setting up tracking for this session
 
-1. Ensure the CLI is installed (see *Prerequisites* — offer to install if `command -v tickbird`
-   finds nothing), then confirm auth: `tickbird whoami --json` (exit `3` → tell the user to set
-   `TICKBIRD_TOKEN`).
-2. Pick the org: `tickbird org list --json`. If only one, use it; otherwise ask.
-3. List projects: `tickbird project list --org <org> --json` → ask the user which one.
-4. List tasks: `tickbird task list --org <org> --project <project> --json`. **Often nothing
-   matches the work at hand — that's expected. Don't force-fit an existing task; create one.**
-   Propose a task name from what the user is actually doing (e.g. the feature/branch/ticket) and,
-   on their ok, create it:
+A timer needs an **org + project + task**. The org+project are resolved **once per repo** and
+reused; the **task is per session**. Do the cheapest thing that's still missing:
 
-   ```bash
-   tickbird task create --org <org> --project <project> --name "<concise task name>" \
-     [--description "…"] [--internal] [--planned-seconds <n>] --json
-   ```
+**1. Reuse the project if `.tickbird` already exists.** If the repo root has a `.tickbird` with
+`TICKBIRD_ORG` and `TICKBIRD_PROJECT`, **use them as-is — do not re-ask**. Skip straight to the
+task (step 3).
 
-   Use the returned task `id` for the binding. Use an existing task only when one clearly fits.
-5. Write the binding file `.tickbird` at the repo root (dotenv format the hook sources):
+**2. Otherwise resolve org + project once** (then write `.tickbird`):
 
-   ```
-   TICKBIRD_ORG=org_xxx
-   TICKBIRD_PROJECT=proj_xxx
-   TICKBIRD_TASK=task_xxx
-   ```
+- Org: `tickbird org list --json`. If only one, use it; otherwise ask.
+- Project: `tickbird project list --org <org> --json` → ask the user which one.
+- Write `.tickbird` at the repo root (dotenv the hook sources), org+project only:
 
-6. Make sure `.tickbird` is gitignored (it's per-user). Add the line if missing.
+  ```
+  TICKBIRD_ORG=org_xxx
+  TICKBIRD_PROJECT=proj_xxx
+  ```
 
-After this, the hooks accrue time automatically every turn. To re-bind later, edit/delete `.tickbird`.
+  Make sure `.tickbird` **and** `.tickbird.d/` are gitignored (both per-user). Add them if missing.
+
+**3. Resolve this session's task** and write its per-session file:
+
+- `tickbird task list --org <org> --project <project> --json`. **Often nothing matches the work at
+  hand — that's expected. Don't force-fit an existing task; create one.** Propose a task name from
+  what the user is actually doing (e.g. the feature/branch/ticket) and, on their ok, create it:
+
+  ```bash
+  tickbird task create --org <org> --project <project> --name "<concise task name>" \
+    [--description "…"] [--internal] [--planned-seconds <n>] --json
+  ```
+
+  Use an existing task only when one clearly fits.
+- Write the per-session binding (keyed by this session's id, so concurrent sessions don't collide):
+
+  ```bash
+  mkdir -p .tickbird.d
+  printf 'TICKBIRD_TASK=%s\n' "<task_id>" > ".tickbird.d/${TICKBIRD_SESSION_ID:-$CLAUDE_CODE_SESSION_ID}"
+  ```
+
+  (Add `TICKBIRD_PROJECT=<project_id>` to that file only if this session tracks a *different*
+  project than `.tickbird`.)
+
+After this, the hooks accrue time automatically every turn. To re-bind later, edit/delete
+`.tickbird` (org+project) or the per-session file under `.tickbird.d/`.
 
 ### Switching task mid-session
 
@@ -95,7 +130,11 @@ again, **prefer creating a new task over reusing a vaguely-related one**. To swi
 1. Settle the current timer first (see *Committing* — show the total, confirm). Accrued time
    belongs to the old task; don't carry it onto the new one.
 2. Create the new task (`tickbird task create …`) or pick an existing fitting one.
-3. Rewrite `TICKBIRD_TASK` (and `TICKBIRD_PROJECT` if it changed) in `.tickbird`.
+3. Rewrite **only this session's file** with the new task — never touch the shared `.tickbird`:
+
+   ```bash
+   printf 'TICKBIRD_TASK=%s\n' "<new_task_id>" > ".tickbird.d/${TICKBIRD_SESSION_ID:-$CLAUDE_CODE_SESSION_ID}"
+   ```
 
 The next prompt's `resume` hook then starts accruing against the new task automatically.
 
@@ -140,5 +179,9 @@ Never commit silently, and never let the `SessionEnd` hook commit — it only pa
 - `log add` accepts either `--duration <minutes>` or `--start/--end` (ISO-8601), and an
   `--idempotency-key` to make a retried write safe.
 - Times are ISO-8601 / `YYYY-MM-DD`; pass `--timezone` (IANA) to reports for correct day boundaries.
-- The binding file deliberately mirrors the CLI's own `TICKBIRD_ORG` env var, so sourcing it sets
-  the org for free; project/task are passed as flags.
+- The shared `.tickbird` deliberately mirrors the CLI's own `TICKBIRD_ORG` env var, so sourcing it
+  sets the org for free; project/task are passed as flags. The per-session task lives in
+  `.tickbird.d/<session_id>` so concurrent agents in one repo track different tasks without
+  clobbering each other (the hook sources the shared file, then overlays the session file).
+- When you `commit`, `status`, `pause`, or `resume`, target **this session's** project + task —
+  the ones in `.tickbird` + `.tickbird.d/${TICKBIRD_SESSION_ID}`, not another session's.
