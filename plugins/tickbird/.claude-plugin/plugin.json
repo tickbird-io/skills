@@ -1,14 +1,14 @@
 {
   "name": "tickbird",
   "displayName": "Tickbird time tracking",
-  "version": "0.1.0",
-  "description": "Auto-track time with the Tickbird CLI: active-time timer hooks plus a /track skill for setup, status, and confirmed commits.",
+  "version": "0.2.0",
+  "description": "Bill your Claude Code sessions with Tickbird: effort reporting (prompts, tokens per model, agent time) or an active-time stopwatch, plus a /track skill for setup and status.",
   "author": {
     "name": "Tickbird",
     "email": "hello@tickbird.io"
   },
   "homepage": "https://tickbird.io",
   "repository": "https://github.com/tickbird-io/skills",
-  "keywords": ["time-tracking", "worklog", "timer", "tickbird"],
+  "keywords": ["time-tracking", "worklog", "timer", "effort", "tickbird"],
   "hooks": "./hooks/hooks.json"
 }

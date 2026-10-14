@@ -4,8 +4,9 @@ description: >
   Track time with Tickbird's CLI (`tickbird`) from inside an agent session. Use whenever the
   user wants to track, log, start/stop/pause/resume a timer, record worklogs, see how long
   something took, or get a time report — or mentions tickbird, time tracking, or worklogs.
-  Pairs with hooks that auto-accrue time while Claude works; this skill drives setup, status,
-  and the user-confirmed commit. Do NOT trigger for unrelated git/CI timing.
+  Pairs with hooks that report each session to Tickbird as effort-based time (effort mode) or
+  run an active-time stopwatch (timer mode); this skill drives setup, status, and — in timer
+  mode only — the user-confirmed commit. Do NOT trigger for unrelated git/CI timing.
 ---
 
 # Tickbird time tracking
@@ -14,14 +15,44 @@ Integrates the `tickbird` CLI so the agent can track time as you work and log wo
 CLI is built for agents: every command takes `--json` (auto-enabled when stdout isn't a TTY)
 and returns stable exit codes (`0` ok, `2` usage, `3` auth, `4` not-found, `5` API error).
 
-## The golden rule: never commit without asking
+## The golden rule: never commit without asking (timer mode)
 
-**Committing a worklog is always a deliberate, user-confirmed step.** Time accrues silently on
+In **timer mode**, **committing a worklog is always a deliberate, user-confirmed step.** Time accrues silently on
 a paused timer (across turns and sessions), but you must NEVER run `tickbird timer commit`
 without first showing the user the total and getting an explicit yes. When a task is done — or
 the user signals they're wrapping up — proactively offer to commit (see *Committing* below).
 
-## How auto-tracking works (active-time model)
+## Two modes: effort (default for new repos) or timer
+
+The repo's `.tickbird` picks the mode with `TICKBIRD_MODE` (a session's `.tickbird.d/` file may
+override it). Only the binding files count — never the environment.
+
+**Effort mode** (`TICKBIRD_MODE=effort`) — no stopwatch and nothing to commit. After every turn
+the hooks hand the session transcript to `tickbird effort hook claude-code`, which reports the
+whole session to the bound task: prompt lengths (never the prompt text), tokens per model, and
+the time spent inside turns. Tickbird scores it with the org's effort factors and prices the AI
+spend per model. Each turn re-reports the session and supersedes the previous report, so there
+is one entry per session. Requires a CLI that has `tickbird effort`.
+
+**Timer mode** (`TICKBIRD_MODE=timer`) — the active-time stopwatch plus a confirmed commit,
+described below. A binding without `TICKBIRD_MODE` (every binding written before effort mode)
+means timer mode.
+
+| Goal (effort mode) | Command |
+| --- | --- |
+| What was reported, plus any refusal (locked period, unknown task, …) | `tickbird effort status` |
+| Show the figures and estimate, store nothing | `tickbird effort report --agent claude-code --session "${TICKBIRD_SESSION_ID:-$CLAUDE_CODE_SESSION_ID}" --dry-run` |
+| Switch this repo from the stopwatch | `tickbird effort bind --mode effort` |
+
+The commit rules apply to timer mode only: in effort mode the "never commit without asking" rule
+and the *Committing* section don't apply, because there is nothing to commit. When the user asks
+for the number, show `tickbird effort status`, and don't argue with the estimate.
+
+Switching tasks works as in timer mode (rewrite this session's `.tickbird.d/` file, see
+*Switching task mid-session*). What was already reported stays on the old task, and the new task
+gets only what follows, so nothing is billed twice.
+
+## How auto-tracking works in timer mode
 
 Hooks run a stopwatch so you don't have to — installed by the Tickbird plugin, or wired into
 `.claude/settings.local.json` for a local setup:
@@ -93,7 +124,10 @@ task (step 3).
   ```
   TICKBIRD_ORG=org_xxx
   TICKBIRD_PROJECT=proj_xxx
+  TICKBIRD_MODE=effort
   ```
+
+  New bindings use effort mode unless the user asks for the stopwatch (`timer`).
 
   Make sure `.tickbird` **and** `.tickbird.d/` are gitignored (both per-user). Add them if missing.
 
@@ -119,7 +153,7 @@ task (step 3).
   (Add `TICKBIRD_PROJECT=<project_id>` to that file only if this session tracks a *different*
   project than `.tickbird`.)
 
-After this, the hooks accrue time automatically every turn. To re-bind later, edit/delete
+After this, the hooks report (effort mode) or accrue (timer mode) automatically every turn. To re-bind later, edit/delete
 `.tickbird` (org+project) or the per-session file under `.tickbird.d/`.
 
 ### Switching task mid-session
@@ -127,7 +161,7 @@ After this, the hooks accrue time automatically every turn. To re-bind later, ed
 When the conversation moves to a different piece of work, the bound task usually won't match —
 again, **prefer creating a new task over reusing a vaguely-related one**. To switch cleanly:
 
-1. Settle the current timer first (see *Committing* — show the total, confirm). Accrued time
+1. In timer mode, settle the current timer first (see *Committing* — show the total, confirm). Accrued time
    belongs to the old task; don't carry it onto the new one.
 2. Create the new task (`tickbird task create …`) or pick an existing fitting one.
 3. Rewrite **only this session's file** with the new task — never touch the shared `.tickbird`:
@@ -136,7 +170,8 @@ again, **prefer creating a new task over reusing a vaguely-related one**. To swi
    printf 'TICKBIRD_TASK=%s\n' "<new_task_id>" > ".tickbird.d/${TICKBIRD_SESSION_ID:-$CLAUDE_CODE_SESSION_ID}"
    ```
 
-The next prompt's `resume` hook then starts accruing against the new task automatically.
+The next prompt's `resume` hook then starts accruing against the new task automatically (timer
+mode); in effort mode the next turn's report goes to the new task.
 
 ## Daily commands
 
@@ -156,7 +191,7 @@ All take `--org` (or `$TICKBIRD_ORG` from the sourced binding) and support `--js
 `timer status` JSON: `{ project, task, running, elapsedSeconds }`. Convert `elapsedSeconds` to
 `Hh Mm` when telling the user the total.
 
-## Committing (always confirm; show the total first)
+## Committing (timer mode; always confirm; show the total first)
 
 Trigger this when a **task is done** or the user is **wrapping up** — don't wait to be asked:
 
