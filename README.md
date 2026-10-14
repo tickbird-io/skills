@@ -28,7 +28,13 @@ Updating is a `git pull` under the hood — no CLI release required:
 
 - **A `/track` skill** — resolves your org/project/task on first use (creating a task when
   nothing fits), shows status, and drives **confirmed** worklog commits.
-- **Active-time hooks** — the timer resumes when you send a prompt and pauses the instant a turn
+- **Effort reporting** (the default for new repos) — after every turn the hooks hand the session
+  to `tickbird effort`, which reports it to the bound task as effort-based time: prompt lengths,
+  tokens per model, and time spent inside turns. No timer runs and there's nothing to commit;
+  prompt text stays on your machine. Needs a CLI that has `tickbird effort`. Codex and opencode
+  users get the same via `tickbird effort setup codex|opencode`.
+- **Active-time hooks** (timer mode: `TICKBIRD_MODE=timer`, and any binding written before effort
+  mode) — the timer resumes when you send a prompt and pauses the instant a turn
   ends, so idle time between turns is never logged. The hooks **never commit**; committing is
   always a deliberate step the skill walks you through (it shows the total first).
 
@@ -43,7 +49,7 @@ plugins/tickbird/
 ├── .claude-plugin/plugin.json         # plugin manifest (declares the hooks)
 ├── skills/track/SKILL.md              # the /track skill
 ├── hooks/hooks.json                   # UserPromptSubmit→resume, Stop/SessionEnd→pause
-└── scripts/tickbird-track.sh          # the stopwatch (no-ops without a .tickbird binding)
+└── scripts/tickbird-track.sh          # effort report or stopwatch, by mode (no-ops without a .tickbird binding)
 ```
 
 ## Without the plugin
